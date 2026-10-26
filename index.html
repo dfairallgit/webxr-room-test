@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive WebXR VR Room</title>
+    <!-- Tailwind CSS for UI overlay styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            user-select: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        /* Custom UI overlays */
+        .ui-overlay {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .interactive-ui {
+            pointer-events: auto;
+        }
+        /* Style standard Three.js VR Button if injected */
+        #VRButton {
+            position: absolute !important;
+            bottom: 24px !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            padding: 12px 24px !important;
+            border-radius: 9999px !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            letter-spacing: 0.05em !important;
+            background: rgba(13, 148, 136, 0.9) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3) !important;
+            backdrop-filter: blur(8px) !important;
+            transition: all 0.25s ease !important;
+            cursor: pointer !important;
+        }
+        #VRButton:hover {
+            background: rgba(20, 184, 166, 1) !important;
+            transform: translateX(-50%) scale(1.05) !important;
+        }
+    </style>
+
+    <!-- Import Map to handle module specifiers seamlessly -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-100">
+
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Header Banner -->
+    <div class="ui-overlay top-0 left-0 right-0 p-6 flex justify-between items-start">
+        <div class="bg-slate-800/80 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50 shadow-xl max-w-sm interactive-ui">
+            <div class="flex items-center space-x-2 mb-1">
+                <span class="inline-block w-3 h-3 rounded-full bg-teal-400 animate-pulse"></span>
+                <h1 class="font-bold text-lg text-white">WebXR VR Geometric Room</h1>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed mb-3">
+                Experience an interactive geometric gallery space directly in your browser or Meta Quest headset.
+            </p>
+            <div class="space-y-1 text-xs text-slate-400">
+                <div class="flex items-center gap-2">
+                    <span class="px-1.5 py-0.5 bg-slate-700 rounded text-[10px] font-mono text-teal-300">Desktop</span>
+                    <span>Click and drag to rotate camera, click objects to interact.</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="px-1.5 py-0.5 bg-slate-700 rounded text-[10px] font-mono text-teal-300">VR</span>
+                    <span>Point controller ray and press trigger to animate shapes.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mode Indicator Badge -->
+        <div id="xr-status-badge" class="bg-slate-800/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-300 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span id="xr-status-text">WebGL Mode (Ready for VR)</span>
+        </div>
+    </div>
+
+    <!-- Interaction Feedback Toast -->
+    <div id="toast" class="ui-overlay bottom-20 left-1/2 -translate-x-1/2 bg-teal-500/90 text-white px-4 py-2 rounded-full text-xs font-medium shadow-lg backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none">
+        Selected Geometric Artifact
+    </div>
+
+    <!-- Application Script -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+        // --- Global Application Variables ---
+        let scene, camera, renderer, controls;
+        let controller1, controller2;
+        let controllerGrip1, controllerGrip2;
+        let raycaster, mouse;
+        const interactiveObjects = [];
+        let intersectedObject = null;
+
+        // --- Room Specifications ---
+        const ROOM_WIDTH = 10;
+        const ROOM_HEIGHT = 5;
+        const ROOM_DEPTH = 10;
+
+        init();
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // 1. SCENE CREATION
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+            scene.fog = new THREE.FogExp2(0x0f172a, 0.05);
+
+            // 2. CAMERA SETUP
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 50);
+            // Position camera inside the room at standing height
+            camera.position.set(0, 1.6, 3.5);
+
+            // 3. RENDERER SETUP
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.1;
+            
+            // Enable WebXR on the renderer
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 4. VR BUTTON INITIALIZATION
+            const vrButton = VRButton.createButton(renderer);
+            document.body.appendChild(vrButton);
+
+            // Listen for XR Session state changes to update UI
+            renderer.xr.addEventListener('sessionstart', () => {
+                const badge = document.getElementById('xr-status-text');
+                const dot = document.querySelector('#xr-status-badge span');
+                if (badge) badge.textContent = "VR Session Active";
+                if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400";
+            });
+
+            renderer.xr.addEventListener('sessionend', () => {
+                const badge = document.getElementById('xr-status-text');
+                const dot = document.querySelector('#xr-status-badge span');
+                if (badge) badge.textContent = "WebGL Mode (Ready for VR)";
+                if (dot) dot.className = "w-2 h-2 rounded-full bg-amber-400";
+            });
+
+            // 5. DESKTOP ORBIT CONTROLS
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 1.3, 0);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI / 2 + 0.05; // Prevent camera going below floor
+            controls.minDistance = 0.5;
+            controls.maxDistance = 8;
+            controls.update();
+
+            // 6. BUILD SCENE ELEMENTS
+            buildRoom();
+            buildLighting();
+            buildGeometricArtifacts();
+
+            // 7. WEBXR CONTROLLERS SETUP
+            setupVRControllers();
+
+            // 8. RAYCASTING & INTERACTION LISTENERS
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('pointerdown', onPointerDown);
+
+            // 9. START ANIMATION / RENDER LOOP
+            // Important: WebXR requires renderer.setAnimationLoop instead of requestAnimationFrame
+            renderer.setAnimationLoop(render);
+        }
+
+        // --- PROCEDURAL TEXTURE GENERATION ---
+        // Generates a grid floor texture dynamically without external image dependencies
+        function createTileTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            // Tile background
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(0, 0, 512, 512);
+
+            // Grid lines
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 8;
+
+            const tileSize = 64;
+            for (let i = 0; i <= 512; i += tileSize) {
+                // Vertical lines
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, 512);
+                ctx.stroke();
+
+                // Horizontal lines
+                ctx.beginPath();
+                ctx.moveTo(0, i);
+                ctx.lineTo(512, i);
+                ctx.stroke();
+            }
+
+            // Subtle inner tile bevel effect
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 2;
+            for (let x = 0; x < 512; x += tileSize) {
+                for (let y = 0; y < 512; y += tileSize) {
+                    ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+                }
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(8, 8);
+            return texture;
+        }
+
+        // --- ROOM CONSTRUCTION ---
+        function buildRoom() {
+            // Room Group Container
+            const roomGroup = new THREE.Group();
+
+            // Materials
+            const floorTexture = createTileTexture();
+            const floorMaterial = new THREE.MeshStandardMaterial({
+                map: floorTexture,
+                roughness: 0.3,
+                metalness: 0.1
+            });
+
+            const wallMaterial = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+
+            const accentWallMaterial = new THREE.MeshStandardMaterial({
+                color: 0x0f172a,
+                roughness: 0.6,
+                metalness: 0.3
+            });
+
+            const ceilingMaterial = new THREE.MeshStandardMaterial({
+                color: 0x0f172a,
+                roughness: 0.9
+            });
+
+            // 1. Floor
+            const floor = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_DEPTH),
+                floorMaterial
+            );
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            roomGroup.add(floor);
+
+            // 2. Ceiling
+            const ceiling = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_DEPTH),
+                ceilingMaterial
+            );
+            ceiling.rotation.x = Math.PI / 2;
+            ceiling.position.y = ROOM_HEIGHT;
+            roomGroup.add(ceiling);
+
+            // 3. Back Wall (Accent Feature Wall)
+            const backWall = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_HEIGHT),
+                accentWallMaterial
+            );
+            backWall.position.set(0, ROOM_HEIGHT / 2, -ROOM_DEPTH / 2);
+            backWall.receiveShadow = true;
+            roomGroup.add(backWall);
+
+            // 4. Left Wall
+            const leftWall = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROOM_DEPTH, ROOM_HEIGHT),
+                wallMaterial
+            );
+            leftWall.position.set(-ROOM_WIDTH / 2, ROOM_HEIGHT / 2, 0);
+            leftWall.rotation.y = Math.PI / 2;
+            leftWall.receiveShadow = true;
+            roomGroup.add(leftWall);
+
+            // 5. Right Wall
+            const rightWall = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROOM_DEPTH, ROOM_HEIGHT),
+                wallMaterial
+            );
+            rightWall.position.set(ROOM_WIDTH / 2, ROOM_HEIGHT / 2, 0);
+            rightWall.rotation.y = -Math.PI / 2;
+            rightWall.receiveShadow = true;
+            roomGroup.add(rightWall);
+
+            // Decorative Baseboards/Trim along the bottom edge
+            const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 });
+            const backTrim = new THREE.Mesh(
+                new THREE.BoxGeometry(ROOM_WIDTH, 0.15, 0.05),
+                trimMaterial
+            );
+            backTrim.position.set(0, 0.075, -ROOM_DEPTH / 2 + 0.025);
+            roomGroup.add(backTrim);
+
+            scene.add(roomGroup);
+        }
+
+        // --- LIGHTING SETUP ---
+        function buildLighting() {
+            // Ambient base illumination
+            const ambientLight = new THREE.AmbientLight(0x94a3b8, 0.4);
+            scene.add(ambientLight);
+
+            // Main Directional Light (Simulating key spotlight with shadows)
+            const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            mainLight.position.set(3, 4.5, 2);
+            mainLight.castShadow = true;
+            mainLight.shadow.mapSize.width = 2048;
+            mainLight.shadow.mapSize.height = 2048;
+            mainLight.shadow.camera.near = 0.5;
+            mainLight.shadow.camera.far = 12;
+            mainLight.shadow.camera.left = -5;
+            mainLight.shadow.camera.right = 5;
+            mainLight.shadow.camera.top = 5;
+            mainLight.shadow.camera.bottom = -5;
+            mainLight.shadow.bias = -0.0005;
+            scene.add(mainLight);
+
+            // Colored Point Lights for ambient mood/depth
+            const cyanPointLight = new THREE.PointLight(0x06b6d4, 2, 6);
+            cyanPointLight.position.set(-3.5, 2.5, -3);
+            scene.add(cyanPointLight);
+
+            const magentaPointLight = new THREE.PointLight(0xd946ef, 2, 6);
+            magentaPointLight.position.set(3.5, 2.5, -3);
+            scene.add(magentaPointLight);
+
+            // Ceiling Light Fixture (Visual mesh + SpotLight)
+            const fixtureGroup = new THREE.Group();
+            fixtureGroup.position.set(0, ROOM_HEIGHT - 0.2, 0);
+
+            const fixtureMesh = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.6, 0.7, 0.2, 16),
+                new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.2 })
+            );
+            fixtureGroup.add(fixtureMesh);
+
+            const emitterMesh = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.5, 0.5, 0.05, 16),
+                new THREE.MeshBasicMaterial({ color: 0xfef08a })
+            );
+            emitterMesh.position.y = -0.1;
+            fixtureGroup.add(emitterMesh);
+
+            const spotLight = new THREE.SpotLight(0xfffbeb, 2.5);
+            spotLight.position.set(0, 0, 0);
+            spotLight.angle = Math.PI / 3;
+            spotLight.penumbra = 0.5;
+            spotLight.castShadow = true;
+            spotLight.target.position.set(0, 0, 0);
+            fixtureGroup.add(spotLight);
+            fixtureGroup.add(spotLight.target);
+
+            scene.add(fixtureGroup);
+        }
+
+        // --- GEOMETRIC ARTIFACTS & PEDESTALS ---
+        function buildGeometricArtifacts() {
+            const pedestalMaterial = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                roughness: 0.5,
+                metalness: 0.5
+            });
+
+            // 1. Center Pedestal & Floating Octahedron
+            const centerPedestal = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.5, 0.6, 0.8, 8),
+                pedestalMaterial
+            );
+            centerPedestal.position.set(0, 0.4, -2);
+            centerPedestal.castShadow = true;
+            centerPedestal.receiveShadow = true;
+            scene.add(centerPedestal);
+
+            const octahedronMat = new THREE.MeshStandardMaterial({
+                color: 0x14b8a6,
+                roughness: 0.2,
+                metalness: 0.8,
+                emissive: 0x0f766e,
+                emissiveIntensity: 0.2
+            });
+            const octahedron = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), octahedronMat);
+            octahedron.position.set(0, 1.25, -2);
+            octahedron.castShadow = true;
+            octahedron.userData = {
+                name: "Teal Octahedron",
+                baseY: 1.25,
+                rotSpeedY: 0.015,
+                rotSpeedX: 0.008,
+                pulseFactor: 0,
+                originalColor: 0x14b8a6,
+                activeColor: 0x2dd4bf
+            };
+            scene.add(octahedron);
+            interactiveObjects.push(octahedron);
+
+            // 2. Left Pedestal & Glassy Icosahedron
+            const leftPedestal = new THREE.Mesh(
+                new THREE.BoxGeometry(0.8, 0.7, 0.8),
+                pedestalMaterial
+            );
+            leftPedestal.position.set(-1.8, 0.35, -2);
+            leftPedestal.castShadow = true;
+            leftPedestal.receiveShadow = true;
+            scene.add(leftPedestal);
+
+            const icosahedronMat = new THREE.MeshStandardMaterial({
+                color: 0x8b5cf6,
+                roughness: 0.1,
+                metalness: 0.9,
+                emissive: 0x581c87,
+                emissiveIntensity: 0.3
+            });
+            const icosahedron = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), icosahedronMat);
+            icosahedron.position.set(-1.8, 1.15, -2);
+            icosahedron.castShadow = true;
+            icosahedron.userData = {
+                name: "Purple Icosahedron",
+                baseY: 1.15,
+                rotSpeedY: -0.01,
+                rotSpeedX: 0.01,
+                pulseFactor: 1,
+                originalColor: 0x8b5cf6,
+                activeColor: 0xa855f7
+            };
+            scene.add(icosahedron);
+            interactiveObjects.push(icosahedron);
+
+            // 3. Right Pedestal & Gold Torus Knot
+            const rightPedestal = new THREE.Mesh(
+                new THREE.BoxGeometry(0.8, 0.7, 0.8),
+                pedestalMaterial
+            );
+            rightPedestal.position.set(1.8, 0.35, -2);
+            rightPedestal.castShadow = true;
+            rightPedestal.receiveShadow = true;
+            scene.add(rightPedestal);
+
+            const torusKnotMat = new THREE.MeshStandardMaterial({
+                color: 0xf59e0b,
+                roughness: 0.3,
+                metalness: 0.8,
+                emissive: 0x78350f,
+                emissiveIntensity: 0.2
+            });
+            const torusKnot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.22, 0.08, 64, 16), torusKnotMat);
+            torusKnot.position.set(1.8, 1.15, -2);
+            torusKnot.castShadow = true;
+            torusKnot.userData = {
+                name: "Golden Knot",
+                baseY: 1.15,
+                rotSpeedY: 0.02,
+                rotSpeedX: 0.005,
+                pulseFactor: 2,
+                originalColor: 0xf59e0b,
+                activeColor: 0xfbbf24
+            };
+            scene.add(torusKnot);
+            interactiveObjects.push(torusKnot);
+
+            // 4. Background Decorative Stacked Cubes
+            const stackGroup = new THREE.Group();
+            stackGroup.position.set(-3.2, 0, -3.8);
+
+            const cubeMat1 = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 });
+            const cubeMat2 = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.4 });
+
+            const baseCube = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), cubeMat1);
+            baseCube.position.y = 0.4;
+            baseCube.castShadow = true;
+            baseCube.receiveShadow = true;
+            stackGroup.add(baseCube);
+
+            const midCube = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), cubeMat2);
+            midCube.position.set(0, 1.1, 0);
+            midCube.rotation.y = Math.PI / 6;
+            midCube.castShadow = true;
+            midCube.receiveShadow = true;
+            stackGroup.add(midCube);
+
+            scene.add(stackGroup);
+        }
+
+        // --- WEBXR CONTROLLERS SETUP ---
+        function setupVRControllers() {
+            const controllerModelFactory = new XRControllerModelFactory();
+
+            // Controller 1 (Right/Primary)
+            controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            scene.add(controller1);
+
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+            scene.add(controllerGrip1);
+
+            // Controller 2 (Left)
+            controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            scene.add(controller2);
+
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+            scene.add(controllerGrip2);
+
+            // Add visible laser ray vectors to controllers
+            const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -5)
+            ]);
+            const rayMaterial = new THREE.LineBasicMaterial({
+                color: 0x2dd4bf,
+                transparent: true,
+                opacity: 0.6
+            });
+
+            const ray1 = new THREE.Line(rayGeometry, rayMaterial);
+            ray1.name = 'ray';
+            ray1.scale.z = 1;
+            controller1.add(ray1);
+
+            const ray2 = new THREE.Line(rayGeometry, rayMaterial);
+            ray2.name = 'ray';
+            ray2.scale.z = 1;
+            controller2.add(ray2);
+        }
+
+        // --- INTERACTION HANDLERS ---
+        function triggerObjectActivation(obj) {
+            if (!obj) return;
+
+            // Trigger visual bounce animation
+            obj.scale.set(1.3, 1.3, 1.3);
+            
+            // Momentary color highlight
+            if (obj.material && obj.userData.activeColor) {
+                obj.material.color.setHex(obj.userData.activeColor);
+                obj.material.emissiveIntensity = 0.8;
+                
+                setTimeout(() => {
+                    obj.material.color.setHex(obj.userData.originalColor);
+                    obj.material.emissiveIntensity = 0.2;
+                }, 400);
+            }
+
+            // Show Toast notification in Desktop/UI overlay
+            showToast(`Interacted with: ${obj.userData.name || 'Artifact'}`);
+        }
+
+        function onSelectStart(event) {
+            const controller = event.target;
+            const intersections = getControllerIntersections(controller);
+
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                const object = intersection.object;
+                triggerObjectActivation(object);
+                controller.userData.selected = object;
+            }
+        }
+
+        function onSelectEnd(event) {
+            const controller = event.target;
+            controller.userData.selected = null;
+        }
+
+        // Desktop mouse interaction handler
+        function onPointerDown(event) {
+            // Ignore if clicking on UI interactive elements
+            if (event.target.closest('.interactive-ui') || event.target.id === 'VRButton') return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(interactiveObjects);
+
+            if (intersects.length > 0) {
+                triggerObjectActivation(intersects[0].object);
+            }
+        }
+
+        function getControllerIntersections(controller) {
+            const tempMatrix = new THREE.Matrix4();
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+            return raycaster.intersectObjects(interactiveObjects, false);
+        }
+
+        function handleControllerHover() {
+            cleanHoverState();
+
+            [controller1, controller2].forEach(controller => {
+                if (!controller) return;
+
+                const intersections = getControllerIntersections(controller);
+                const ray = controller.getObjectByName('ray');
+
+                if (intersections.length > 0) {
+                    const hit = intersections[0];
+                    if (ray) ray.scale.z = hit.distance / 5;
+                    hit.object.material.emissiveIntensity = 0.5;
+                } else {
+                    if (ray) ray.scale.z = 1;
+                }
+            });
+        }
+
+        function cleanHoverState() {
+            interactiveObjects.forEach(obj => {
+                if (obj.material && obj.material.emissiveIntensity !== undefined) {
+                    obj.material.emissiveIntensity = THREE.MathUtils.lerp(
+                        obj.material.emissiveIntensity,
+                        0.2,
+                        0.1
+                    );
+                }
+            });
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.textContent = message;
+            toast.classList.remove('opacity-0');
+            toast.classList.add('opacity-100');
+
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => {
+                toast.classList.remove('opacity-100');
+                toast.classList.add('opacity-0');
+            }, 2000);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- MAIN RENDER LOOP ---
+        function render(timestamp) {
+            const time = timestamp * 0.001; // Seconds
+
+            // 1. Update OrbitControls only when NOT presenting in VR
+            if (!renderer.xr.isPresenting) {
+                controls.update();
+            }
+
+            // 2. Animate Geometric Artifacts (Floating, rotating, scaling back to 1)
+            interactiveObjects.forEach(obj => {
+                // Continuous rotation
+                obj.rotation.y += obj.userData.rotSpeedY;
+                obj.rotation.x += obj.userData.rotSpeedX;
+
+                // Gentle floating sine-wave motion
+                const offset = Math.sin(time * 2 + obj.userData.pulseFactor) * 0.05;
+                obj.position.y = obj.userData.baseY + offset;
+
+                // Scale recovery after interaction click
+                obj.scale.x = THREE.MathUtils.lerp(obj.scale.x, 1, 0.1);
+                obj.scale.y = THREE.MathUtils.lerp(obj.scale.y, 1, 0.1);
+                obj.scale.z = THREE.MathUtils.lerp(obj.scale.z, 1, 0.1);
+            });
+
+            // 3. VR Controller Raycasting hover highlights
+            if (renderer.xr.isPresenting) {
+                handleControllerHover();
+            }
+
+            // 4. Render Scene
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
